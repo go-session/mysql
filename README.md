@@ -85,9 +85,9 @@ $ ./server
 
     Copyright (c) 2018 Lyric
 
-[reportcard-url]: https://goreportcard.com/report/github.com/go-session/mongo
-[reportcard-image]: https://goreportcard.com/badge/github.com/go-session/mongo
-[godoc-url]: https://godoc.org/github.com/go-session/mongo
-[godoc-image]: https://godoc.org/github.com/go-session/mongo?status.svg
+[reportcard-url]: https://goreportcard.com/report/github.com/go-session/mysql
+[reportcard-image]: https://goreportcard.com/badge/github.com/go-session/mysql
+[godoc-url]: https://godoc.org/github.com/go-session/mysql
+[godoc-image]: https://godoc.org/github.com/go-session/mysql?status.svg
 [license-url]: http://opensource.org/licenses/MIT
 [license-image]: https://img.shields.io/npm/l/express.svg
