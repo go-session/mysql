@@ -81,14 +81,13 @@ func NewStoreWithDB(db *sql.DB, tableName string, gcInterval int) session.Manage
 		},
 	}
 
-	table := store.db.AddTableWithName(SessionItem{}, store.tableName)
-	table.AddIndex("idx_expired_at", "Btree", []string{"expired_at"})
+	store.db.AddTableWithName(SessionItem{}, store.tableName)
 
 	err := store.db.CreateTablesIfNotExists()
 	if err != nil {
 		panic(err)
 	}
-	store.db.CreateIndex()
+	store.db.Exec(fmt.Sprintf("CREATE INDEX `idx_expired_at` ON %s (`expired_at`);", store.tableName))
 
 	go store.gc()
 	return store
