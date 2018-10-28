@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,15 +11,13 @@ import (
 	"time"
 
 	"github.com/go-session/session"
-	"github.com/json-iterator/go"
-	"gopkg.in/gorp.v2"
 )
 
 var (
 	_             session.ManagerStore = &managerStore{}
 	_             session.Store        = &store{}
-	jsonMarshal                        = jsoniter.Marshal
-	jsonUnmarshal                      = jsoniter.Unmarshal
+	jsonMarshal                        = json.Marshal
+	jsonUnmarshal                      = json.Unmarshal
 )
 
 // NewConfig create mysql configuration instance
@@ -60,7 +59,7 @@ func NewStore(config *Config, tableName string, gcInterval int) session.ManagerS
 // gcInterval Time interval for executing GC (in seconds, default 600)
 func NewStoreWithDB(db *sql.DB, tableName string, gcInterval int) session.ManagerStore {
 	store := &managerStore{
-		db:        &gorp.DbMap{Db: db, Dialect: gorp.MySQLDialect{Encoding: "UTF8", Engine: "MyISAM"}},
+		db:        db,
 		tableName: "go_session",
 		stdout:    os.Stderr,
 	}
@@ -75,18 +74,7 @@ func NewStoreWithDB(db *sql.DB, tableName string, gcInterval int) session.Manage
 	}
 	store.ticker = time.NewTicker(time.Second * time.Duration(interval))
 
-	store.pool = sync.Pool{
-		New: func() interface{} {
-			return newStore(store.db, store.tableName)
-		},
-	}
-
-	store.db.AddTableWithName(SessionItem{}, store.tableName)
-
-	err := store.db.CreateTablesIfNotExists()
-	if err != nil {
-		panic(err)
-	}
+	store.db.Exec(fmt.Sprintf("CREATE TABLE IF NOT EXISTS `%s` (`id` VARCHAR(255) NOT NULL PRIMARY KEY, `value` VARCHAR(2048), `expired_at` bigint) engine=InnoDB charset=UTF8;", store.tableName))
 	store.db.Exec(fmt.Sprintf("CREATE INDEX `idx_expired_at` ON %s (`expired_at`);", store.tableName))
 
 	go store.gc()
@@ -95,8 +83,7 @@ func NewStoreWithDB(db *sql.DB, tableName string, gcInterval int) session.Manage
 
 type managerStore struct {
 	ticker    *time.Ticker
-	pool      sync.Pool
-	db        *gorp.DbMap
+	db        *sql.DB
 	tableName string
 	stdout    io.Writer
 }
@@ -111,13 +98,15 @@ func (s *managerStore) errorf(format string, args ...interface{}) {
 func (s *managerStore) gc() {
 	for range s.ticker.C {
 		now := time.Now().Unix()
-		query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE expired_at<=?", s.tableName)
-		n, err := s.db.SelectInt(query, now)
+
+		var count int
+		row := s.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s` WHERE `expired_at`<=?", s.tableName), now)
+		err := row.Scan(&count)
 		if err != nil {
 			s.errorf("[ERROR]:%s", err.Error())
 			return
-		} else if n > 0 {
-			_, err = s.db.Exec(fmt.Sprintf("DELETE FROM %s WHERE expired_at<=?", s.tableName), now)
+		} else if count > 0 {
+			_, err = s.db.Exec(fmt.Sprintf("DELETE FROM `%s` WHERE `expired_at`<=?", s.tableName), now)
 			if err != nil {
 				s.errorf("[ERROR]:%s", err.Error())
 			}
@@ -128,7 +117,8 @@ func (s *managerStore) gc() {
 func (s *managerStore) getValue(sid string) (string, error) {
 	var item SessionItem
 
-	err := s.db.SelectOne(&item, fmt.Sprintf("SELECT * FROM %s WHERE id=?", s.tableName), sid)
+	row := s.db.QueryRow(fmt.Sprintf("SELECT `id`,`value`,`expired_at` FROM `%s` WHERE `id`=?", s.tableName), sid)
+	err := row.Scan(&item.ID, &item.Value, &item.ExpiredAt)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", nil
@@ -162,23 +152,18 @@ func (s *managerStore) Check(_ context.Context, sid string) (bool, error) {
 }
 
 func (s *managerStore) Create(ctx context.Context, sid string, expired int64) (session.Store, error) {
-	store := s.pool.Get().(*store)
-	store.reset(ctx, sid, expired, nil)
-	return store, nil
+	return newStore(ctx, s, sid, expired, nil), nil
 }
 
 func (s *managerStore) Update(ctx context.Context, sid string, expired int64) (session.Store, error) {
-	store := s.pool.Get().(*store)
-
 	value, err := s.getValue(sid)
 	if err != nil {
 		return nil, err
 	} else if value == "" {
-		store.reset(ctx, sid, expired, nil)
-		return store, nil
+		return newStore(ctx, s, sid, expired, nil), nil
 	}
 
-	_, err = s.db.Exec(fmt.Sprintf("UPDATE %s SET expired_at=? WHERE id=?", s.tableName),
+	_, err = s.db.Exec(fmt.Sprintf("UPDATE `%s` SET `expired_at`=? WHERE `id`=?", s.tableName),
 		time.Now().Add(time.Duration(expired)*time.Second).Unix(),
 		sid)
 	if err != nil {
@@ -190,31 +175,24 @@ func (s *managerStore) Update(ctx context.Context, sid string, expired int64) (s
 		return nil, err
 	}
 
-	store.reset(ctx, sid, expired, values)
-	return store, nil
+	return newStore(ctx, s, sid, expired, values), nil
 }
 
 func (s *managerStore) Delete(_ context.Context, sid string) error {
-	_, err := s.db.Exec(fmt.Sprintf("DELETE FROM %s WHERE id=?", s.tableName), sid)
+	_, err := s.db.Exec(fmt.Sprintf("DELETE FROM `%s` WHERE `id`=?", s.tableName), sid)
 	return err
 }
 
 func (s *managerStore) Refresh(ctx context.Context, oldsid, sid string, expired int64) (session.Store, error) {
-	store := s.pool.Get().(*store)
-
 	value, err := s.getValue(oldsid)
 	if err != nil {
 		return nil, err
 	} else if value == "" {
-		store.reset(ctx, sid, expired, nil)
-		return store, nil
+		return newStore(ctx, s, sid, expired, nil), nil
 	}
 
-	err = s.db.Insert(&SessionItem{
-		ID:        sid,
-		Value:     value,
-		ExpiredAt: time.Now().Add(time.Duration(expired) * time.Second).Unix(),
-	})
+	query := fmt.Sprintf("INSERT INTO `%s` (`id`,`value`,`expired_at`) VALUES (?,?,?);", s.tableName)
+	_, err = s.db.Exec(query, sid, value, time.Now().Add(time.Duration(expired)*time.Second).Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -229,41 +207,38 @@ func (s *managerStore) Refresh(ctx context.Context, oldsid, sid string, expired 
 		return nil, err
 	}
 
-	store.reset(ctx, sid, expired, values)
-	return store, nil
+	return newStore(ctx, s, sid, expired, values), nil
 }
 
 func (s *managerStore) Close() error {
 	s.ticker.Stop()
-	s.db.Db.Close()
+	s.db.Close()
 	return nil
 }
 
-func newStore(db *gorp.DbMap, tableName string) *store {
+func newStore(ctx context.Context, s *managerStore, sid string, expired int64, values map[string]interface{}) *store {
+	if values == nil {
+		values = make(map[string]interface{})
+	}
+
 	return &store{
-		db:        db,
-		tableName: tableName,
+		db:        s.db,
+		tableName: s.tableName,
+		ctx:       ctx,
+		sid:       sid,
+		expired:   expired,
+		values:    values,
 	}
 }
 
 type store struct {
 	sync.RWMutex
 	ctx       context.Context
-	db        *gorp.DbMap
+	db        *sql.DB
 	tableName string
 	sid       string
 	expired   int64
 	values    map[string]interface{}
-}
-
-func (s *store) reset(ctx context.Context, sid string, expired int64, values map[string]interface{}) {
-	if values == nil {
-		values = make(map[string]interface{})
-	}
-	s.ctx = ctx
-	s.sid = sid
-	s.expired = expired
-	s.values = values
 }
 
 func (s *store) Context() context.Context {
@@ -320,18 +295,18 @@ func (s *store) Save() error {
 	}
 	s.RUnlock()
 
-	n, err := s.db.SelectInt(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id=?", s.tableName), s.sid)
+	var count int
+	row := s.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE id=?", s.tableName), s.sid)
+	err := row.Scan(&count)
 	if err != nil {
 		return err
-	} else if n == 0 {
-		return s.db.Insert(&SessionItem{
-			ID:        s.sid,
-			Value:     value,
-			ExpiredAt: time.Now().Add(time.Duration(s.expired) * time.Second).Unix(),
-		})
+	} else if count == 0 {
+		query := fmt.Sprintf("INSERT INTO `%s` (`id`,`value`,`expired_at`) VALUES (?,?,?);", s.tableName)
+		_, err = s.db.Exec(query, s.sid, value, time.Now().Add(time.Duration(s.expired)*time.Second).Unix())
+		return err
 	}
 
-	_, err = s.db.Exec(fmt.Sprintf("UPDATE %s SET value=?,expired_at=? WHERE id=?", s.tableName),
+	_, err = s.db.Exec(fmt.Sprintf("UPDATE `%s` SET `value`=?,`expired_at`=? WHERE `id`=?", s.tableName),
 		value,
 		time.Now().Add(time.Duration(s.expired)*time.Second).Unix(),
 		s.sid)
@@ -341,7 +316,7 @@ func (s *store) Save() error {
 
 // SessionItem Data items stored in mysql
 type SessionItem struct {
-	ID        string `db:"id,primarykey,size:255"`
-	Value     string `db:"value,size:2048"`
-	ExpiredAt int64  `db:"expired_at"`
+	ID        string
+	Value     string
+	ExpiredAt int64
 }

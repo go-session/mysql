@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-session/mysql"
 	"github.com/go-session/session"
+
 	_ "github.com/go-sql-driver/mysql"
 )
 
