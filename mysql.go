@@ -102,14 +102,16 @@ func (s *managerStore) gc() {
 		var count int
 		row := s.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM `%s` WHERE `expired_at`<=?", s.tableName), now)
 		err := row.Scan(&count)
-		if err != nil {
-			s.errorf("[ERROR]:%s", err.Error())
-			return
-		} else if count > 0 {
-			_, err = s.db.Exec(fmt.Sprintf("DELETE FROM `%s` WHERE `expired_at`<=?", s.tableName), now)
+		if err != nil || count == 0 {
 			if err != nil {
 				s.errorf("[ERROR]:%s", err.Error())
 			}
+			continue
+		}
+
+		_, err = s.db.Exec(fmt.Sprintf("DELETE FROM `%s` WHERE `expired_at`<=?", s.tableName), now)
+		if err != nil {
+			s.errorf("[ERROR]:%s", err.Error())
 		}
 	}
 }
