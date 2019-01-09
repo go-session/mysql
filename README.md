@@ -29,7 +29,7 @@ import (
 func main() {
 	dsn := "root:123456@tcp(127.0.0.1:3306)/myapp_test?charset=utf8"
 	session.InitManager(
-		session.SetStore(mysql.NewStore(mysql.NewConfig(dsn), "", 0)),
+		session.SetStore(mysql.NewDefaultStore(mysql.NewConfig(dsn))),
 	)
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

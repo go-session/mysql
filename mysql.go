@@ -38,6 +38,11 @@ type Config struct {
 	MaxIdleConns    int
 }
 
+// NewDefaultStore Create an instance of a mysql store
+func NewDefaultStore(config *Config) session.ManagerStore {
+	return NewStore(config, "", 0)
+}
+
 // NewStore Create an instance of a mysql store,
 // tableName Specify the stored table name (default go_session),
 // gcInterval Time interval for executing GC (in seconds, default 600)
