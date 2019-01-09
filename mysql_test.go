@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	dsn = "root:123456@tcp(127.0.0.1:3306)/myapp_test?charset=utf8"
+	dsn = "root:@tcp(127.0.0.1:3306)/myapp_test?charset=utf8"
 )
 
 func TestStore(t *testing.T) {
