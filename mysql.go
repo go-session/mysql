@@ -10,7 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-session/session"
+	_ "github.com/go-sql-driver/mysql"
+
+	"github.com/go-session/session/v3"
 )
 
 var (
@@ -87,10 +89,10 @@ func NewStoreWithDB(db *sql.DB, tableName string, gcInterval int) session.Manage
 }
 
 type managerStore struct {
+	stdout    io.Writer
 	ticker    *time.Ticker
 	db        *sql.DB
 	tableName string
-	stdout    io.Writer
 }
 
 func (s *managerStore) errorf(format string, args ...interface{}) {
@@ -242,10 +244,10 @@ type store struct {
 	sync.RWMutex
 	ctx       context.Context
 	db        *sql.DB
+	values    map[string]interface{}
 	tableName string
 	sid       string
 	expired   int64
-	values    map[string]interface{}
 }
 
 func (s *store) Context() context.Context {
